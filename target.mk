@@ -41,4 +41,4 @@ BMP_PORT	?=
 #STLINK_PORT	?= :4242
 
 
-include ../../../../rules.mk
+include rules.mk

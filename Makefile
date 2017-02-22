@@ -20,7 +20,7 @@
 BINARY = usbdfu
 CSTD = -std=gnu99
 
-LDSCRIPT = ../lisa-m.ld
+LDSCRIPT = F105RC.ld
 
-include ../../Makefile.include
+include target.mk
 
