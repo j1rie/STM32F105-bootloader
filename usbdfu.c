@@ -1,21 +1,21 @@
 /*
- * This file is part of the libopencm3 project.
+ * This file is part of the IRMP_STM32 project.
  *
  * Copyright (C) 2010 Gareth McMullin <gareth@blacksphere.co.nz>
  * Copyright (C) 2017 Joerg Riechardt
  *
- * This library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this library.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <string.h>
@@ -27,6 +27,7 @@
 #include <libopencm3/usb/dfu.h>
 
 #define APP_ADDRESS	0x08002000
+#define MAX_ADDRESS	0x08040000
 
 /* Commands sent with wBlockNum == 0 as per ST implementation. */
 #define CMD_SETADDR	0x21
@@ -54,7 +55,7 @@ const struct usb_device_descriptor dev = {
 	.bMaxPacketSize0 = 64,
 	.idVendor = 0x0483,
 	.idProduct = 0xDF11,
-	.bcdDevice = 0x0200,
+	.bcdDevice = 0x0100,
 	.iManufacturer = 1,
 	.iProduct = 2,
 	.iSerialNumber = 3,
@@ -122,7 +123,7 @@ static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
 		*bwPollTimeout = 100;
 		return DFU_STATUS_OK;
 	case STATE_DFU_MANIFEST_SYNC:
-		/* Device will reset when read is complete. */
+		/* Device will reset when read is complete */
 		usbdfu_state = STATE_DFU_MANIFEST;
 		return DFU_STATUS_OK;
 	default:
@@ -130,49 +131,41 @@ static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
 	}
 }
 
-static bool dfuUploadStarted(void) {
-    return (usbdfu_state == STATE_DFU_DNBUSY) ? 1 : 0;
-}
-
-static bool dfuUploadDone(void)
-{
-    return (usbdfu_state == STATE_DFU_MANIFEST) ? 1 : 0;
-}
-
-static void usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
+static void usbdfu_getstatus_complete(usbd_device *device,
+					  struct usb_setup_data *req)
 {
 	int i;
 	(void)req;
-	(void)usbd_dev;
+	(void)device;
 
 	switch (usbdfu_state) {
 	case STATE_DFU_DNBUSY:
 		flash_unlock();
 		if (prog.blocknum == 0) {
+			if ((*(uint32_t*)(prog.buf+1) < APP_ADDRESS) ||
+				(*(uint32_t*)(prog.buf+1) >= MAX_ADDRESS)) {
+				usbd_ep_stall_set(device, 0, 1);
+				return;
+			}
 			switch (prog.buf[0]) {
 			case CMD_ERASE:
-				{
-					uint32_t *dat = (uint32_t *)(prog.buf + 1);
-					flash_erase_page(*dat);
-				}
+				flash_erase_page(*(uint32_t*)(prog.buf+1));
 			case CMD_SETADDR:
-				{
-					uint32_t *dat = (uint32_t *)(prog.buf + 1);
-					prog.addr = *dat;
-				}
+				prog.addr = *(uint32_t*)(prog.buf+1);
 			}
 		} else {
-			uint32_t baseaddr = prog.addr + ((prog.blocknum - 2) *
-				       dfu_function.wTransferSize);
-			for (i = 0; i < prog.len; i += 2) {
-				uint16_t *dat = (uint16_t *)(prog.buf + i);
+			uint32_t baseaddr = prog.addr +
+				((prog.blocknum - 2) *
+					dfu_function.wTransferSize);
+			for (i = 0; i < prog.len; i += 2)
 				flash_program_half_word(baseaddr + i,
-						*dat);
-			}
+						*(uint16_t*)(prog.buf+i));
 		}
 		flash_lock();
 
-		/* Jump straight to dfuDNLOAD-IDLE, skipping dfuDNLOAD-SYNC. */
+		/* We jump straight to dfuDNLOAD-IDLE,
+		 * skipping dfuDNLOAD-SYNC
+		 */
 		usbdfu_state = STATE_DFU_DNLOAD_IDLE;
 		return;
 	case STATE_DFU_MANIFEST:
@@ -184,13 +177,16 @@ static void usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_da
 	}
 }
 
-static int usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req, uint8_t **buf,
-		uint16_t *len, void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req))
+static int usbdfu_control_request(usbd_device *device,
+				  struct usb_setup_data *req, uint8_t **buf,
+				  uint16_t *len,
+				  void (**complete)(usbd_device *device,
+						struct usb_setup_data *req))
 {
-	(void)usbd_dev;
+	(void)device;
 
 	if ((req->bmRequestType & 0x7F) != 0x21)
-		return 0; /* Only accept class request. */
+		return 0; /* Only accept class request */
 
 	switch (req->bRequest) {
 	case DFU_DNLOAD:
@@ -198,7 +194,7 @@ static int usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *
 			usbdfu_state = STATE_DFU_MANIFEST_SYNC;
 			return 1;
 		} else {
-			/* Copy download data for use on GET_STATUS. */
+			/* Copy download data for use on GET_STATUS */
 			prog.blocknum = req->wValue;
 			prog.len = *len;
 			memcpy(prog.buf, *buf, *len);
@@ -206,19 +202,20 @@ static int usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *
 			return 1;
 		}
 	case DFU_CLRSTATUS:
-		/* Clear error and return to dfuIDLE. */
+		/* Clear error and return to dfuIDLE */
 		if (usbdfu_state == STATE_DFU_ERROR)
 			usbdfu_state = STATE_DFU_IDLE;
 		return 1;
 	case DFU_ABORT:
-		/* Abort returns to dfuIDLE state. */
+		/* Abort returns to dfuIDLE state */
 		usbdfu_state = STATE_DFU_IDLE;
 		return 1;
 	case DFU_UPLOAD:
-		/* Upload not supported for now. */
+		/* Upload not supported for now */
 		return 0;
 	case DFU_GETSTATUS: {
 		uint32_t bwPollTimeout = 0; /* 24-bit integer in DFU class spec */
+
 		(*buf)[0] = usbdfu_getstatus(&bwPollTimeout);
 		(*buf)[1] = bwPollTimeout & 0xFF;
 		(*buf)[2] = (bwPollTimeout >> 8) & 0xFF;
@@ -226,11 +223,13 @@ static int usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *
 		(*buf)[4] = usbdfu_state;
 		(*buf)[5] = 0; /* iString not used here */
 		*len = 6;
+
 		*complete = usbdfu_getstatus_complete;
+
 		return 1;
 		}
 	case DFU_GETSTATE:
-		/* Return state with no state transision. */
+		/* Return state with no state transision */
 		*buf[0] = usbdfu_state;
 		*len = 1;
 		return 1;
@@ -239,15 +238,14 @@ static int usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *
 	return 0;
 }
 
-static void usbdfu_set_config(usbd_device *usbd_dev, uint16_t wValue)
-{
-	(void)wValue;
 
-	usbd_register_control_callback(
-				usbd_dev,
-				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
-				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
-				usbdfu_control_request);
+static bool dfuUploadStarted(void) {
+    return (usbdfu_state == STATE_DFU_DNBUSY) ? 1 : 0;
+}
+
+static bool dfuUploadDone(void)
+{
+    return (usbdfu_state == STATE_DFU_MANIFEST) ? 1 : 0;
 }
 
 static void strobePin(uint32_t bank, uint16_t pin, uint8_t count, uint32_t rate) {
@@ -276,10 +274,22 @@ static bool checkUserCode(uint32_t usrAddr) {
     }
 }
 
+static void jump_to_app_if_valid(void)
+{
+    /* Boot the application if it's valid */
+    if(checkUserCode(APP_ADDRESS)) {
+	/* Set vector table base address */
+	SCB_VTOR = APP_ADDRESS & 0xFFFF;
+	/* Initialise master stack pointer */
+	asm volatile ("msr msp, %0"::"g"
+	    (*(volatile uint32_t*)APP_ADDRESS));
+	    /* Jump to application */
+	    (*(void(**)())(APP_ADDRESS + 4))();
+    }
+}
+
 int main(void)
 {
-	usbd_device *usbd_dev;
-
 	rcc_clock_setup_in_hse_25mhz_out_72mhz();
 
 	rcc_periph_clock_enable(RCC_GPIOB);
@@ -289,8 +299,12 @@ int main(void)
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);
 
-	usbd_dev = usbd_init(&stm32f107_usb_driver, &dev, &config, usb_strings, 4, usbd_control_buffer, sizeof(usbd_control_buffer));
-	usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
+	usbd_device *usbd_dev = usbd_init(&stm32f107_usb_driver, &dev, &config, usb_strings, 4, usbd_control_buffer, sizeof(usbd_control_buffer));
+
+	usbd_register_control_callback(usbd_dev,
+		      USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
+		      USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
+		      usbdfu_control_request);
 
 	bool no_user_jump = !checkUserCode(APP_ADDRESS);
   
@@ -309,18 +323,9 @@ int main(void)
 	    }
 	}
 
-	/* Boot the application if it's valid. */
-	if ((*(volatile uint32_t *)APP_ADDRESS & 0x2FFE0000) == 0x20000000) {
-	    /* Set vector table base address. */
-	    SCB_VTOR = APP_ADDRESS & 0xFFFF;
-	    /* Initialise master stack pointer. */
-	    asm volatile("msr msp, %0"::"g"
-		(*(volatile uint32_t *)APP_ADDRESS));
-	    /* Jump to application. */
-	    (*(void (**)())(APP_ADDRESS + 4))();
-	} else {
-	    // some sort of fault occurred, hard reset
-	    strobePin(GPIOB, GPIO12, 5, 0x50000);
-	    scb_reset_system();
-    }
+	jump_to_app_if_valid();
+
+	// some sort of fault occurred, hard reset
+	strobePin(GPIOB, GPIO12, 5, 0x50000);
+	scb_reset_system();
 }
