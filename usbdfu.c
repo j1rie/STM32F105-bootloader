@@ -131,12 +131,27 @@ static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
 	}
 }
 
+static void strobePin(uint32_t bank, uint16_t pin, uint8_t count, uint32_t rate) {
+    gpio_clear(bank, pin);
+
+    uint32_t c;
+    while (count-- > 0) {
+        for (c = rate; c > 0; c--) {
+            asm volatile("nop");
+        }
+        gpio_set(bank, pin);
+        for (c = rate; c > 0; c--) {
+            asm volatile("nop");
+        }
+        gpio_clear(bank, pin);
+    }
+}
+
 static void usbdfu_getstatus_complete(usbd_device *device,
 					  struct usb_setup_data *req)
 {
 	int i;
 	(void)req;
-	(void)device;
 
 	switch (usbdfu_state) {
 	case STATE_DFU_DNBUSY:
@@ -144,6 +159,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		if (prog.blocknum == 0) {
 			if ((*(uint32_t*)(prog.buf+1) < APP_ADDRESS) ||
 				(*(uint32_t*)(prog.buf+1) >= MAX_ADDRESS)) {
+				flash_lock();
 				usbd_ep_stall_set(device, 0, 1);
 				return;
 			}
@@ -160,6 +176,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 			for (i = 0; i < prog.len; i += 2)
 				flash_program_half_word(baseaddr + i,
 						*(uint16_t*)(prog.buf+i));
+			strobePin(GPIOB, GPIO12, 2, 0x10000);
 		}
 		flash_lock();
 
@@ -170,7 +187,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		return;
 	case STATE_DFU_MANIFEST:
 		/* USB device must detach, we just reset... */
-		//scb_reset_system();
+		scb_reset_system();
 		return; /* Will never return. */
 	default:
 		return;
@@ -238,7 +255,6 @@ static int usbdfu_control_request(usbd_device *device,
 	return 0;
 }
 
-
 static bool dfuUploadStarted(void) {
     return (usbdfu_state == STATE_DFU_DNBUSY) ? 1 : 0;
 }
@@ -246,22 +262,6 @@ static bool dfuUploadStarted(void) {
 static bool dfuUploadDone(void)
 {
     return (usbdfu_state == STATE_DFU_MANIFEST) ? 1 : 0;
-}
-
-static void strobePin(uint32_t bank, uint16_t pin, uint8_t count, uint32_t rate) {
-    gpio_clear(bank, pin);
-
-    uint32_t c;
-    while (count-- > 0) {
-        for (c = rate; c > 0; c--) {
-            asm volatile("nop");
-        }
-        gpio_set(bank, pin);
-        for (c = rate; c > 0; c--) {
-            asm volatile("nop");
-        }
-        gpio_clear(bank, pin);
-    }
 }
 
 static bool checkUserCode(uint32_t usrAddr) {
@@ -279,7 +279,7 @@ static void jump_to_app_if_valid(void)
     /* Boot the application if it's valid */
     if(checkUserCode(APP_ADDRESS)) {
 	/* Set vector table base address */
-	SCB_VTOR = APP_ADDRESS & 0xFFFF;
+	SCB_VTOR = APP_ADDRESS & 0x3FFFF;
 	/* Initialise master stack pointer */
 	asm volatile ("msr msp, %0"::"g"
 	    (*(volatile uint32_t*)APP_ADDRESS));
@@ -290,6 +290,12 @@ static void jump_to_app_if_valid(void)
 
 int main(void)
 {
+	/* If we did just download new code, reset the register and jump */
+	if (RCC_CSR & RCC_CSR_SFTRSTF) { /* software reset */
+		RCC_CSR = (RCC_CSR & RCC_CSR_RMVF); /* Clear the reset flags */
+		jump_to_app_if_valid();
+	}
+
 	rcc_clock_setup_in_hse_25mhz_out_72mhz();
 
 	rcc_periph_clock_enable(RCC_GPIOB);
@@ -318,14 +324,8 @@ int main(void)
 		    while (!dfuUploadDone()) {
 			usbd_poll(usbd_dev);
 		    }
-		    break;
 		}
 	    }
 	}
-
-	jump_to_app_if_valid();
-
-	// some sort of fault occurred, hard reset
-	strobePin(GPIOB, GPIO12, 5, 0x50000);
 	scb_reset_system();
 }
