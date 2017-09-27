@@ -23,4 +23,3 @@ CSTD = -std=gnu99
 LDSCRIPT = F105RC.ld
 
 include target.mk
-

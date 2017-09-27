@@ -97,7 +97,7 @@ SCRIPT_DIR	= $(OPENCM3_DIR)/scripts
 ###############################################################################
 # C flags
 
-TGT_CFLAGS	+= $(OPT) $(CSTD) -g
+TGT_CFLAGS	+= $(OPT) $(CSTD) -g -flto
 TGT_CFLAGS	+= $(ARCH_FLAGS)
 TGT_CFLAGS	+= -Wextra -Wshadow -Wimplicit-function-declaration
 TGT_CFLAGS	+= -Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes
@@ -121,7 +121,7 @@ TGT_CPPFLAGS	+= $(DEFS)
 ###############################################################################
 # Linker flags
 
-TGT_LDFLAGS		+= --static -nostartfiles
+TGT_LDFLAGS		+= --static -nostartfiles -flto
 TGT_LDFLAGS		+= -T$(LDSCRIPT)
 TGT_LDFLAGS		+= $(ARCH_FLAGS)
 TGT_LDFLAGS		+= -Wl,-Map=$(*).map
@@ -129,6 +129,7 @@ TGT_LDFLAGS		+= -Wl,--gc-sections
 ifeq ($(V),99)
 TGT_LDFLAGS		+= -Wl,--print-gc-sections
 endif
+TGT_LDFLAGS		+= --specs=nano.specs
 
 ###############################################################################
 # Used libraries
