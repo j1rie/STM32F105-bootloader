@@ -111,21 +111,6 @@ static const char *usb_strings[] = {
 	//"@Internal Flash   /0x08000000/8*001Ka,56*001Kg",
 };
 
-static void strobePin(uint32_t bank, uint16_t pin, uint8_t count, uint32_t rate) {
-	gpio_clear(bank, pin);
-	uint32_t c;
-	while (count-- > 0) {
-		for (c = rate; c > 0; c--) {
-			asm volatile("nop");
-		}
-		gpio_set(bank, pin);
-		for (c = rate; c > 0; c--) {
-			asm volatile("nop");
-		}
-		gpio_clear(bank, pin);
-	}
-}
-
 static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
 {
 	switch (usbdfu_state) {
@@ -155,10 +140,11 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		uint32_t baseaddr = prog.addr +
 					prog.blocknum * dfu_function.wTransferSize;
 		flash_erase_page(baseaddr);
+		gpio_set(GPIOB, GPIO12);
 		for (i = 0; i < prog.len; i += 2)
 			flash_program_half_word(baseaddr + i,
 						*(uint16_t*)(prog.buf+i));
-		strobePin(GPIOB, GPIO12, 1, 0x500);
+		gpio_clear(GPIOB, GPIO12);
 
 		/* We jump straight to dfuDNLOAD-IDLE,
 		 * skipping dfuDNLOAD-SYNC
@@ -323,10 +309,13 @@ int main(void)
 	int delay_count = 0;
 	
 	while ((delay_count++ < 1) || no_user_jump) {
-		strobePin(GPIOB, GPIO12, 1, 0x10000);
+		gpio_set(GPIOB, GPIO12);
 		for (int i=0; i<250000; i++) {
 			usbd_poll(usbd_dev);
+			if(i==200000)
+				gpio_clear(GPIOB, GPIO12);
 			if(dfuUploadStarted()) {
+				gpio_clear(GPIOB, GPIO12);
 				while(!dfuUploadDone()) {
 					usbd_poll(usbd_dev);
 				}

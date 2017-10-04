@@ -6,4 +6,4 @@ Needs libopencm3.
 
 https://github.com/libopencm3/libopencm3-examples/tree/master/examples/stm32/f1/lisa-m-1/usb_dfu
 
-for Windows WinUSB drivers from zadig are needed
+For Windows WinUSB drivers from zadig are needed.
