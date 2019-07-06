@@ -26,7 +26,7 @@
 #include <libopencm3/stm32/tools.h>
 #include <libopencm3/stm32/st_usbfs.h>
 
-#define APP_ADDRESS	0x08002000
+#define APP_ADDRESS	0x08005000
 
 /* We need a special large control buffer for this device: */
 uint8_t usbd_control_buffer[2048];
@@ -75,10 +75,7 @@ const struct usb_interface_descriptor iface = {
 	.bInterfaceClass = 0xFE, /* Device Firmware Upgrade */
 	.bInterfaceSubClass = 1,
 	.bInterfaceProtocol = 2,
-
-	/* The ST Microelectronics DfuSe application needs this string.
-	 * The format isn't documented... */
-	.iInterface = 4,
+	.iInterface = 3,
 
 	.extra = &dfu_function,
 	.extralen = sizeof(dfu_function),
@@ -106,8 +103,6 @@ static const char *usb_strings[] = {
 	"IRMP STM32 project",
 	"STM32 Bootloader",
 	"BL 01",
-	/* This string is used by ST Microelectronics' DfuSe utility. */
-	//"@Internal Flash   /0x08000000/8*001Ka,56*001Kg",
 };
 
 static uint8_t usbdfu_getstatus(uint32_t *bwPollTimeout)
@@ -149,8 +144,6 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 		 * skipping dfuDNLOAD-SYNC
 		 */
 		usbdfu_state = STATE_DFU_DNLOAD_IDLE;
-		return;
-	case STATE_DFU_MANIFEST_WAIT_RESET:
 		return;
 	default:
 		return;
@@ -221,11 +214,11 @@ static int usbdfu_control_request(usbd_device *device,
 	return 0;
 }
 
-static bool dfuUploadStarted(void) {
+static bool dfuDnloadStarted(void) {
 	return (usbdfu_state == STATE_DFU_DNBUSY) ? 1 : 0;
 }
 
-static bool dfuUploadDone(void) {
+static bool dfuDnloadDone(void) {
 	return (usbdfu_state == STATE_DFU_MANIFEST_WAIT_RESET) ? 1 : 0;
 }
 
@@ -311,11 +304,11 @@ int main(void)
 		gpio_set(GPIOB, GPIO12);
 		for (int i=0; i<250000; i++) {
 			usbd_poll(usbd_dev);
-			if(i==200000)
+			if(i==125000)
 				gpio_clear(GPIOB, GPIO12);
-			if(dfuUploadStarted()) {
+			if(dfuDnloadStarted()) {
 				gpio_clear(GPIOB, GPIO12);
-				while(!dfuUploadDone()) {
+				while(!dfuDnloadDone()) {
 					usbd_poll(usbd_dev);
 				}
 				/* poll a little more to allow the last status request */
