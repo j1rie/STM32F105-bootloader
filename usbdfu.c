@@ -27,6 +27,8 @@
 #include <libopencm3/stm32/st_usbfs.h>
 
 #define APP_ADDRESS	0x08005000
+#define MAX_ADDRESS	0x08040000
+#define UPLOAD
 
 /* We need a special large control buffer for this device: */
 uint8_t usbd_control_buffer[2048];
@@ -60,7 +62,11 @@ const struct usb_device_descriptor dev = {
 const struct usb_dfu_descriptor dfu_function = {
 	.bLength = sizeof(struct usb_dfu_descriptor),
 	.bDescriptorType = DFU_FUNCTIONAL,
+#ifndef UPLOAD
 	.bmAttributes = USB_DFU_CAN_DOWNLOAD | USB_DFU_WILL_DETACH,
+#else
+	.bmAttributes = USB_DFU_CAN_DOWNLOAD | USB_DFU_CAN_UPLOAD | USB_DFU_WILL_DETACH,
+#endif
 	.wDetachTimeout = 255,
 	.wTransferSize = 2048,
 	.bcdDFUVersion = 0x0110,
@@ -150,7 +156,7 @@ static void usbdfu_getstatus_complete(usbd_device *device,
 	}
 }
 
-static int usbdfu_control_request(usbd_device *device,
+static enum usbd_request_return_codes usbdfu_control_request(usbd_device *device,
 				  struct usb_setup_data *req, uint8_t **buf,
 				  uint16_t *len,
 				  void (**complete)(usbd_device *device,
@@ -187,8 +193,25 @@ static int usbdfu_control_request(usbd_device *device,
 		usbdfu_state = STATE_DFU_IDLE;
 		return 1;
 	case DFU_UPLOAD:
-		/* Upload not supported for now */
+#ifndef UPLOAD
 		return 0;
+#else
+		if ((usbdfu_state == STATE_DFU_IDLE) ||
+			(usbdfu_state == STATE_DFU_UPLOAD_IDLE)) {
+			usbdfu_state = STATE_DFU_UPLOAD_IDLE;
+			uint32_t baseaddr = prog.addr + req->wValue * dfu_function.wTransferSize;
+			uint32_t copy_size = MAX_ADDRESS - baseaddr;
+			gpio_toggle(GPIOB, GPIO12);
+			if (copy_size >= dfu_function.wTransferSize) {
+				memcpy(*buf, (void*)baseaddr, dfu_function.wTransferSize);
+			} else {
+				memcpy(*buf, (void*)baseaddr, copy_size);
+				*len = copy_size;
+				usbdfu_state = STATE_APP_DETACH;
+			}
+		}
+		return 1;
+#endif
 	case DFU_GETSTATUS: {
 		uint32_t bwPollTimeout = 0; /* 24-bit integer in DFU class spec */
 
@@ -215,12 +238,21 @@ static int usbdfu_control_request(usbd_device *device,
 }
 
 static bool dfuDnloadStarted(void) {
+#ifndef UPLOAD
 	return (usbdfu_state == STATE_DFU_DNBUSY) ? 1 : 0;
+#else
+	return (usbdfu_state == STATE_DFU_DNBUSY || usbdfu_state == STATE_DFU_UPLOAD_IDLE) ? 1 : 0;
+#endif
 }
 
 static bool dfuDnloadDone(void) {
 	return (usbdfu_state == STATE_DFU_MANIFEST_WAIT_RESET) ? 1 : 0;
 }
+#ifdef UPLOAD
+static bool dfuUploadDone(void) {
+	return (usbdfu_state == STATE_APP_DETACH) ? 1 : 0;
+}
+#endif
 
 static bool checkUserCode(uint32_t usrAddr) {
 	uint32_t sp = *(volatile uint32_t *) usrAddr;
@@ -308,11 +340,22 @@ int main(void)
 				gpio_clear(GPIOB, GPIO12);
 			if(dfuDnloadStarted()) {
 				gpio_clear(GPIOB, GPIO12);
+#ifndef UPLOAD
 				while(!dfuDnloadDone()) {
+#else
+				while(!dfuDnloadDone() && !dfuUploadDone()) {
+#endif
 					usbd_poll(usbd_dev);
 				}
-				/* poll a little more to allow the last status request */
+				/* poll a little more to allow the last status request, TODO: improve this */
+#ifndef UPLOAD
 				for (int k=0; k<30; k++) { usbd_poll(usbd_dev); }
+#else
+				if (dfuDnloadDone())
+					for (int k=0; k<30; k++) { usbd_poll(usbd_dev); }
+				else
+					for (int k=0; k<500; k++) { usbd_poll(usbd_dev); }
+#endif
 				break;
 			}
 		}
